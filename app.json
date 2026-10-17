@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "a8722cb7-cbc9-42d0-97ae-6147225720e0"
+      }
+    },
+    "android": {
+      "package": "com.mao_zedong254.nextjspostgresqltemplate"
+    },
+    "ios": {
+      "bundleIdentifier": "y",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}
