@@ -1,11 +1,11 @@
-import type { Metadata, Viewport } from "next";
+﻿import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { ToastProvider } from "@/components/toast";
 import RegisterSW from './RegisterSW'
 
 export const metadata: Metadata = {
-  title: "VendFlow — field sales, inventory & expenses",
+  title: "VendFlow \u2014 field sales, inventory & expenses",
   description:
     "Mobile-first operations suite for sales teams: inventory, invoicing, expenses, requisitions and stock reporting in one place.",
   applicationName: "VendFlow",
@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body className="bg-paper text-ink antialiased">
-        <<RegisterSW />
+        <RegisterSW />
         <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
