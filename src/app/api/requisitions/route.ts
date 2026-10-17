@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
 import { createRequisition, listRequisitions } from "@/server/queries";
-import { readJson, reqDate, reqEnum, reqInt, reqString, withAuth } from "@/server/http";
+import { HttpError, readJson, reqDate, reqEnum, reqInt, reqString, withAuth } from "@/server/http";
 import { isoDaysAgo, todayISO } from "@/lib/format";
 import { eq } from "drizzle-orm";
 
@@ -19,7 +19,7 @@ export const POST = withAuth(async (user, req: Request) => {
   const body = await readJson(req);
   const productId = reqInt(body, "productId", { min: 1, max: 1_000_000, required: true });
   const [product] = await db.select().from(products).where(eq(products.id, productId)).limit(1);
-  if (!product) throw new Error("Pick a product from the catalogue");
+  if (!product) throw new HttpError("Pick a product from the catalogue");
 
   const row = await createRequisition({
     productId: product.id,

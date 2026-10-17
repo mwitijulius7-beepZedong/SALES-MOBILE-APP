@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
 import { and, eq, gt } from "drizzle-orm";
@@ -50,18 +50,32 @@ export async function createSession(userId: number) {
   return token;
 }
 
-export async function destroySession() {
+/**
+ * Resolves the session token from either an `Authorization: Bearer` header
+ * (native/mobile clients) or the `vf_session` cookie (web app).
+ */
+export async function resolveSessionToken(): Promise<string | null> {
+  const headerStore = await headers();
+  const auth = headerStore.get("authorization");
+  if (auth && auth.toLowerCase().startsWith("bearer ")) {
+    const token = auth.slice(7).trim();
+    if (token) return token;
+  }
   const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
+  return store.get(SESSION_COOKIE)?.value ?? null;
+}
+
+export async function destroySession(tokenOverride?: string) {
+  const token = tokenOverride ?? (await resolveSessionToken());
   if (token) {
     await db.delete(sessions).where(eq(sessions.token, token));
   }
+  const store = await cookies();
   store.delete(SESSION_COOKIE);
 }
 
 export async function getCurrentUser(): Promise<SessionUser | null> {
-  const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
+  const token = await resolveSessionToken();
   if (!token) return null;
   const rows = await db
     .select({

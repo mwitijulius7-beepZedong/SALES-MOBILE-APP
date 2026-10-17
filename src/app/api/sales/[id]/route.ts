@@ -1,5 +1,5 @@
 import { deleteSale, getSale, setSaleStatus } from "@/server/queries";
-import { readJson, reqEnum, reqInt, withAuth } from "@/server/http";
+import { readJson, reqEnum, reqInt, requireRole, withAuth } from "@/server/http";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +16,7 @@ export const GET = withAuth(async (_user, _req: Request, ctx: Ctx) => {
 });
 
 export const PATCH = withAuth(async (user, req: Request, ctx: Ctx) => {
+  requireRole(user, "owner", "manager");
   const id = await idOf(ctx);
   const body = await readJson(req);
   const status = reqEnum(body, "status", ["completed", "pending", "refunded"], "completed");
@@ -24,6 +25,7 @@ export const PATCH = withAuth(async (user, req: Request, ctx: Ctx) => {
 });
 
 export const DELETE = withAuth(async (user, _req: Request, ctx: Ctx) => {
+  requireRole(user, "owner", "manager");
   const id = await idOf(ctx);
   return await deleteSale(id, { id: user.id, name: user.name });
 });

@@ -45,6 +45,14 @@ export const sessions = pgTable(
   (t) => [index("sessions_user_idx").on(t.userId)],
 );
 
+export const counters = pgTable("counters", {
+  key: text("key").primaryKey(),
+  value: integer("value").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 /* ------------------------------------------------------------------ */
 /* Catalog / inventory                                                 */
 /* ------------------------------------------------------------------ */
