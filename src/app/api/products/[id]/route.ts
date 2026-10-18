@@ -1,5 +1,5 @@
 import { deleteProduct, getProduct, upsertProduct } from "@/server/queries";
-import { readJson, reqBool, reqInt, reqString, withAuth } from "@/server/http";
+import { readJson, reqBool, reqInt, reqString, requireRole, withAuth } from "@/server/http";
 import { usdToCents } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,8 @@ export const PUT = withAuth(async (_user, req: Request, ctx: Ctx) => {
 
 export const PATCH = PUT;
 
-export const DELETE = withAuth(async (_user, _req: Request, ctx: Ctx) => {
+export const DELETE = withAuth(async (user, _req: Request, ctx: Ctx) => {
+  requireRole(user, "owner", "manager");
   const id = await idOf(ctx);
   return await deleteProduct(id);
 });

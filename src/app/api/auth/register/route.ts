@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { ensureSeeded } from "@/db/seed";
 import { users } from "@/db/schema";
-import { createSession, hashPassword, initialsOf } from "@/lib/auth";
+import { hashPassword, initialsOf, issueTokens } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
       })
       .returning();
 
-    await createSession(user.id);
+    await issueTokens(user);
     return NextResponse.json({
       user: {
         id: user.id,

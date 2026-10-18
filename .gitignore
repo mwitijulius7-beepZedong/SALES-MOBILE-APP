@@ -10,3 +10,5 @@ next-env.d.ts
 npm-debug.log*
 .vercel
 .env*
+*.jks
+*.keystore

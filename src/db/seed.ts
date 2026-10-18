@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   customers,
@@ -7,6 +7,7 @@ import {
   requisitions,
   saleItems,
   sales,
+  sessions,
   stockMovements,
   users,
 } from "@/db/schema";
@@ -146,6 +147,7 @@ let seedPromise: Promise<boolean> | null = null;
 export function ensureSeeded() {
   seedPromise ??= runSeed().catch((error) => {
     console.error("[vendflow] seed failed", error);
+    seedPromise = null; // let the next request retry instead of caching the failure forever
     return false;
   });
   return seedPromise;
@@ -167,6 +169,16 @@ async function runSeed() {
     sql`select coalesce((select count(*) from products), 0)::text as count`,
   );
   if (Number(countResult.rows[0]?.count ?? 0) > 0) return false;
+
+  /* A run that failed after inserting users but before products would otherwise
+     collide on the unique email index on every retry — clear those orphans first. */
+  const DEMO_EMAILS = ["demo@vendflow.app", "dani@vendflow.app", "kwame@vendflow.app"];
+  const orphaned = await db.select({ id: users.id }).from(users).where(inArray(users.email, DEMO_EMAILS));
+  if (orphaned.length) {
+    const ids = orphaned.map((o) => o.id);
+    await db.delete(sessions).where(inArray(sessions.userId, ids));
+    await db.delete(users).where(inArray(users.id, ids));
+  }
 
   const rand = mulberry32(20260417);
   const DAYS = 45;

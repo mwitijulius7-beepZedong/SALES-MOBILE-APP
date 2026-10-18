@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { requisitions } from "@/db/schema";
 import { decideRequisition, deleteRequisition } from "@/server/queries";
-import { readJson, reqEnum, reqInt, reqString, withAuth } from "@/server/http";
+import { readJson, reqEnum, reqInt, reqString, requireRole, withAuth } from "@/server/http";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,7 @@ async function idOf(ctx: Ctx) {
 }
 
 export const PATCH = withAuth(async (user, req: Request, ctx: Ctx) => {
+  requireRole(user, "owner", "manager");
   const id = await idOf(ctx);
   const body = await readJson(req);
   const status = reqEnum(body, "status", ["pending", "approved", "rejected", "received"], "approved");
@@ -39,7 +40,8 @@ export const PUT = withAuth(async (_user, req: Request, ctx: Ctx) => {
   return { row };
 });
 
-export const DELETE = withAuth(async (_user, _req: Request, ctx: Ctx) => {
+export const DELETE = withAuth(async (user, _req: Request, ctx: Ctx) => {
+  requireRole(user, "owner", "manager");
   const id = await idOf(ctx);
   return await deleteRequisition(id);
 });

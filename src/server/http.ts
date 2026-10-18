@@ -4,6 +4,13 @@ import { HttpError, requireUser, type SessionUser } from "@/lib/auth";
 
 export { HttpError };
 
+/** Throws 403 unless the user's role is in the allowed list. */
+export function requireRole(user: SessionUser, ...roles: string[]) {
+  if (!roles.includes(user.role)) {
+    throw new HttpError("You don't have permission to do that", 403);
+  }
+}
+
 type Body = { ok?: boolean; [key: string]: unknown };
 
 export function ok<T>(data: T, init?: ResponseInit) {
@@ -25,8 +32,7 @@ export function withAuth<Args extends unknown[]>(
         return NextResponse.json({ error: error.message }, { status: error.status });
       }
       console.error("[vendflow] route error", error);
-      const message = error instanceof Error ? error.message : "Unexpected server error";
-      return NextResponse.json({ error: message }, { status: 500 });
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 });
     }
   };
 }

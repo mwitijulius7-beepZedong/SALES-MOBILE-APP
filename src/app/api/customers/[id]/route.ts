@@ -1,6 +1,6 @@
 import { deleteCustomer, upsertCustomer } from "@/server/queries";
-import { readJson, reqEnum, reqInt, reqString, withAuth } from "@/server/http";
-import { usdToCents } from "@/lib/format";
+import { readJson, reqInt, requireRole, withAuth } from "@/server/http";
+import { customerValues } from "@/server/forms";
 
 export const dynamic = "force-dynamic";
 
@@ -14,25 +14,14 @@ async function idOf(ctx: Ctx) {
 export const PUT = withAuth(async (_user, req: Request, ctx: Ctx) => {
   const id = await idOf(ctx);
   const body = await readJson(req);
-  const row = await upsertCustomer(id, {
-    name: reqString(body, "name", { required: true, max: 90 }),
-    contactName: reqString(body, "contactName", { max: 70 }),
-    phone: reqString(body, "phone", { max: 30 }),
-    email: reqString(body, "email", { max: 80 }),
-    area: reqString(body, "area", { fallback: "—", max: 60 }),
-    segment: reqEnum(body, "segment", ["Retail", "Wholesale", "Key Account"], "Retail"),
-    creditLimitCents: reqInt(body, "creditLimitCents", {
-      min: 0,
-      max: 1_000_000_000,
-      fallback: usdToCents(body.creditLimit as string),
-    }),
-  });
+  const row = await upsertCustomer(id, customerValues(body));
   return { row };
 });
 
 export const PATCH = PUT;
 
-export const DELETE = withAuth(async (_user, _req: Request, ctx: Ctx) => {
+export const DELETE = withAuth(async (user, _req: Request, ctx: Ctx) => {
+  requireRole(user, "owner", "manager");
   const id = await idOf(ctx);
   return await deleteCustomer(id);
 });

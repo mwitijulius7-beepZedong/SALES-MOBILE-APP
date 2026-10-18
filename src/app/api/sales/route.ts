@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withAuth(async (_user, req: Request) => {
   const url = new URL(req.url);
-  const rows = await listSales({
+  const { rows } = await listSales({
     q: url.searchParams.get("q") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     range: url.searchParams.get("range") ?? undefined,
