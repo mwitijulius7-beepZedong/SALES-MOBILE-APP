@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  auditLog,
   counters,
   customers,
   expenses,
@@ -12,6 +13,7 @@ import {
 } from "@/db/schema";
 import { HttpError } from "@/lib/auth";
 import { isoDaysAgo, todayISO } from "@/lib/format";
+import { auditRow } from "@/server/admin";
 
 const num = (value: unknown) => Number(value ?? 0) || 0;
 
@@ -728,6 +730,7 @@ export async function listExpenses(params: {
   q?: string;
   category?: string;
   range?: string;
+  status?: string;
   limit?: number;
   offset?: number;
 }) {
@@ -737,6 +740,7 @@ export async function listExpenses(params: {
     conditions.push(or(ilike(expenses.title, needle), ilike(expenses.vendor, needle), ilike(expenses.note, needle)));
   }
   if (params.category && params.category !== "all") conditions.push(eq(expenses.category, params.category));
+  if (params.status && params.status !== "all") conditions.push(eq(expenses.status, params.status));
   if (params.range && params.range !== "all") {
     const days = Number(params.range.replace("d", "")) || 30;
     conditions.push(gte(expenses.expenseDate, isoDaysAgo(days - 1)));
@@ -774,10 +778,22 @@ export async function listExpenses(params: {
     .groupBy(expenses.category)
     .orderBy(desc(sql`sum(${expenses.amountCents})`));
 
+  const statusRows = await db
+    .select({ status: expenses.status, count: sql<string>`count(*)::text` })
+    .from(expenses)
+    .groupBy(expenses.status);
+
   return {
     rows,
     hasMore,
-    summary: { amount: num(agg?.amount), count: num(agg?.count), avg: num(agg?.avg) },
+    summary: {
+      amount: num(agg?.amount),
+      count: num(agg?.count),
+      avg: num(agg?.avg),
+      pending: num(statusRows.find((s) => s.status === "pending")?.count),
+      approved: num(statusRows.find((s) => s.status === "approved")?.count),
+      rejected: num(statusRows.find((s) => s.status === "rejected")?.count),
+    },
     byCategory: byCategory.map((c) => ({ label: c.label, value: num(c.value), count: num(c.count) })),
   };
 }
@@ -792,9 +808,63 @@ export async function upsertExpense(id: number | null, data: typeof expenses.$in
   return row;
 }
 
-export async function deleteExpense(id: number) {
-  await db.delete(expenses).where(eq(expenses.id, id));
+export async function deleteExpense(id: number, actor?: { id: number; name: string }) {
+  const [row] = await db.delete(expenses).where(eq(expenses.id, id)).returning();
+  if (actor) {
+    await db
+      .insert(auditLog)
+      .values(
+        auditRow({
+          actor,
+          action: "expense.delete",
+          entity: "expense",
+          entityId: id,
+          detail: row ? `${row.title} · ${row.amountCents}` : `Expense #${id}`,
+        }),
+      );
+  }
   return { deleted: true };
+}
+
+/** Reps' expenses go to pending when approvals are on; approvers stay auto-approved. */
+export function initialExpenseStatus(role: string, approvalsRequired: boolean, explicit?: string) {
+  if (explicit) return explicit;
+  const approver = role === "owner" || role === "manager";
+  return approver || !approvalsRequired ? "approved" : "pending";
+}
+
+export async function decideExpense(
+  id: number,
+  status: string,
+  note: string,
+  actor: { id: number; name: string },
+) {
+  return db.transaction(async (tx) => {
+    const [expense] = await tx.select().from(expenses).where(eq(expenses.id, id)).limit(1).for("update");
+    if (!expense) throw new HttpError("Expense not found", 404);
+    const [row] = await tx
+      .update(expenses)
+      .set({
+        status,
+        decisionNote: note,
+        decidedBy: actor.name,
+        decidedAt: new Date(),
+      })
+      .where(eq(expenses.id, id))
+      .returning();
+    await tx
+      .insert(auditLog)
+      .values(
+        auditRow({
+          actor,
+          action: `expense.${status}`,
+          entity: "expense",
+          entityId: id,
+          detail: `${expense.title} · ${expense.amountCents}${note ? ` — ${note}` : ""}`,
+        }),
+      );
+    return row;
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -865,10 +935,23 @@ export async function createRequisition(data: Omit<typeof requisitions.$inferIns
   });
 }
 
-export async function decideRequisition(id: number, status: string, note: string, actor: { id: number; name: string }) {
+export async function decideRequisition(
+  id: number,
+  status: string,
+  note: string,
+  actor: { id: number; name: string },
+  approvedQty?: number,
+) {
   return db.transaction(async (tx) => {
     const [req] = await tx.select().from(requisitions).where(eq(requisitions.id, id)).limit(1).for("update");
     if (!req) throw new HttpError("Requisition not found", 404);
+
+    if (approvedQty !== undefined && approvedQty > req.requestedQty) {
+      throw new HttpError(`Approved quantity can't exceed the requested ${req.requestedQty}`);
+    }
+    if (approvedQty !== undefined && status === "approved" && approvedQty < 1) {
+      throw new HttpError("Approve at least 1 unit, or reject the requisition instead");
+    }
 
     const patch: Partial<typeof requisitions.$inferInsert> = {
       status,
@@ -876,11 +959,11 @@ export async function decideRequisition(id: number, status: string, note: string
       decidedBy: actor.name,
       decidedAt: new Date(),
     };
-    if (status === "approved") patch.approvedQty = req.requestedQty;
+    if (status === "approved") patch.approvedQty = approvedQty ?? req.requestedQty;
     if (status === "rejected") patch.approvedQty = 0;
 
     if (status === "received") {
-      patch.approvedQty = req.approvedQty || req.requestedQty;
+      patch.approvedQty = approvedQty ?? (req.approvedQty || req.requestedQty);
       if (req.productId && req.status !== "received") {
         const [p] = await tx.select().from(products).where(eq(products.id, req.productId)).limit(1).for("update");
         if (p) {
@@ -903,12 +986,36 @@ export async function decideRequisition(id: number, status: string, note: string
     }
 
     const [row] = await tx.update(requisitions).set(patch).where(eq(requisitions.id, id)).returning();
+    await tx
+      .insert(auditLog)
+      .values(
+        auditRow({
+          actor,
+          action: `requisition.${status}`,
+          entity: "requisition",
+          entityId: id,
+          detail: `${req.reqNo}${patch.approvedQty !== undefined ? ` · ${patch.approvedQty}/${req.requestedQty}` : ""}${note ? ` — ${note}` : ""}`,
+        }),
+      );
     return row;
   });
 }
 
-export async function deleteRequisition(id: number) {
-  await db.delete(requisitions).where(eq(requisitions.id, id));
+export async function deleteRequisition(id: number, actor?: { id: number; name: string }) {
+  const [row] = await db.delete(requisitions).where(eq(requisitions.id, id)).returning();
+  if (actor) {
+    await db
+      .insert(auditLog)
+      .values(
+        auditRow({
+          actor,
+          action: "requisition.delete",
+          entity: "requisition",
+          entityId: id,
+          detail: row?.reqNo ?? `Requisition #${id}`,
+        }),
+      );
+  }
   return { deleted: true };
 }
 

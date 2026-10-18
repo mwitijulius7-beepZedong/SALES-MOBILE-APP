@@ -1,14 +1,21 @@
 import {
   boolean,
+  customType,
   date,
   index,
   integer,
+  jsonb,
   pgTable,
   serial,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+
+/** Binary column for stored uploads (drizzle has no built-in bytea helper). */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
 
 /* ------------------------------------------------------------------ */
 /* Users & auth                                                        */
@@ -25,6 +32,7 @@ export const users = pgTable(
     territory: text("territory").notNull().default("Central"),
     initials: text("initials").notNull().default("VF"),
     hue: integer("hue").notNull().default(158),
+    active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -172,6 +180,10 @@ export const expenses = pgTable(
     expenseDate: date("expense_date").notNull(),
     billable: boolean("billable").notNull().default(false),
     note: text("note").notNull().default(""),
+    status: text("status").notNull().default("approved"), // pending | approved | rejected
+    decidedBy: text("decided_by").notNull().default(""),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionNote: text("decision_note").notNull().default(""),
     createdById: integer("created_by_id"),
     createdByName: text("created_by_name").notNull().default("System"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -237,6 +249,76 @@ export const requisitions = pgTable(
     uniqueIndex("requisitions_no_uq").on(t.reqNo),
     index("requisitions_status_idx").on(t.status),
   ],
+);
+
+/* ------------------------------------------------------------------ */
+/* Admin configuration                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Key/value application settings (currency, tax rate, approval flags, ...). */
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Managed picker lists for expense and product categories. */
+export const categories = pgTable(
+  "categories",
+  {
+    id: serial("id").primaryKey(),
+    kind: text("kind").notNull().default("expense"), // expense | product
+    name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("categories_kind_name_uq").on(t.kind, t.name),
+    index("categories_kind_idx").on(t.kind),
+  ],
+);
+
+/** Uploaded files (receipts, invoices, avatars) stored inline in Postgres. */
+export const attachments = pgTable(
+  "attachments",
+  {
+    id: serial("id").primaryKey(),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull().default(0),
+    data: bytea("data").notNull(),
+    entity: text("entity").notNull().default("general"), // expense | requisition | customer | general
+    entityId: integer("entity_id"),
+    uploadedById: integer("uploaded_by_id"),
+    uploadedByName: text("uploaded_by_name").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("attachments_entity_idx").on(t.entity, t.entityId)],
+);
+
+/** Admin/approval activity trail. */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: serial("id").primaryKey(),
+    actorId: integer("actor_id"),
+    actorName: text("actor_name").notNull().default("system"),
+    action: text("action").notNull(),
+    entity: text("entity").notNull(),
+    entityId: integer("entity_id"),
+    detail: text("detail").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("audit_entity_idx").on(t.entity), index("audit_created_idx").on(t.createdAt)],
 );
 
 export type User = typeof users.$inferSelect;

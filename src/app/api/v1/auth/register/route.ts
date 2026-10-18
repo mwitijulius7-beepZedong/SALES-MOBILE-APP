@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { HttpError, createSession, hashPassword, initialsOf } from "@/lib/auth";
+import { HttpError, hashPassword, initialsOf, issueTokens } from "@/lib/auth";
 import { v1Public } from "@/server/v1";
 
 export const dynamic = "force-dynamic";
@@ -37,9 +37,9 @@ export const POST = v1Public(async (req: Request) => {
     })
     .returning();
 
-  const token = await createSession(user.id);
+  const tokens = await issueTokens(user);
   return {
-    token,
+    ...tokens,
     user: {
       id: user.id,
       name: user.name,

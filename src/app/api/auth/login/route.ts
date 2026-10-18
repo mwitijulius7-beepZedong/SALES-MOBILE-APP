@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { ensureSeeded } from "@/db/seed";
 import { users } from "@/db/schema";
-import { createSession, verifyPassword } from "@/lib/auth";
+import { issueTokens, verifyPassword } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +17,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Enter your email and password" }, { status: 400 });
     }
     const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    if (!user || !user.active || !verifyPassword(password, user.passwordHash)) {
       return NextResponse.json({ error: "Those credentials don't match an account" }, { status: 401 });
     }
-    await createSession(user.id);
+    await issueTokens(user);
     return NextResponse.json({
       user: {
         id: user.id,

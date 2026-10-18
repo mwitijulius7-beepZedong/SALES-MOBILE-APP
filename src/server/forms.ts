@@ -1,8 +1,7 @@
 import { HttpError, readJson, reqBool, reqDate, reqEnum, reqInt, reqString } from "@/server/http";
 import { todayISO, usdToCents } from "@/lib/format";
 
-export async function expenseValues(req: Request) {
-  const body = await readJson(req);
+export function expenseFields(body: Record<string, unknown>) {
   return {
     title: reqString(body, "title", { required: true, max: 120 }),
     category: reqString(body, "category", { fallback: "Operations", max: 40 }),
@@ -17,6 +16,10 @@ export async function expenseValues(req: Request) {
     billable: reqBool(body, "billable", false),
     note: reqString(body, "note", { max: 240 }),
   };
+}
+
+export async function expenseValues(req: Request) {
+  return expenseFields(await readJson(req));
 }
 
 export function productValues(body: Record<string, unknown>) {

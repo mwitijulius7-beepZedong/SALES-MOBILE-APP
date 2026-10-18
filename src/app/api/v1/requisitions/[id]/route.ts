@@ -22,7 +22,9 @@ export const PATCH = v1(async (user, req: Request, ctx: Ctx) => {
   const body = await readJson(req);
   const status = reqEnum(body, "status", ["pending", "approved", "rejected", "received"], "approved");
   const note = reqString(body, "note", { max: 240 });
-  return decideRequisition(id, status, note, { id: user.id, name: user.name });
+  const approvedQty =
+    body.approvedQty === undefined ? undefined : reqInt(body, "approvedQty", { min: 0, max: 100_000 });
+  return decideRequisition(id, status, note, { id: user.id, name: user.name }, approvedQty);
 });
 
 export const PUT = v1(async (_user, req: Request, ctx: Ctx) => {
@@ -45,5 +47,5 @@ export const PUT = v1(async (_user, req: Request, ctx: Ctx) => {
 
 export const DELETE = v1(async (user, _req: Request, ctx: Ctx) => {
   requireRole(user, "owner", "manager");
-  return deleteRequisition(await idOf(ctx));
+  return deleteRequisition(await idOf(ctx), { id: user.id, name: user.name });
 });

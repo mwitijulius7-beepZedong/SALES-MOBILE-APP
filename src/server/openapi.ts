@@ -60,7 +60,7 @@ export const openApiSpec = {
     title: "VendFlow API",
     version: "1.0.0",
     description:
-      "Field sales, inventory, expense and requisition API. Authenticate with a Bearer token (native/mobile) or the `vf_session` cookie (web). All money values are integer cents.",
+      "Field sales, inventory, expense and requisition API. Authenticate with a Bearer access JWT (native/mobile) or the `vf_access` cookie (web); renew with the `vf_refresh` refresh token via `/auth/refresh`. All money values are integer cents.",
   },
   servers: [{ url: "/api/v1", description: "Versioned API" }],
   security: [{ bearerAuth: [] }, { cookieAuth: [] }],
@@ -73,6 +73,8 @@ export const openApiSpec = {
     { name: "Requisitions" },
     { name: "Inventory" },
     { name: "Analytics" },
+    { name: "Users" },
+    { name: "Admin" },
     { name: "Meta" },
   ],
   paths: {
@@ -113,7 +115,7 @@ export const openApiSpec = {
     "/auth/register": {
       post: {
         tags: ["Auth"],
-        summary: "Create a rep account and obtain a session token",
+        summary: "Create a rep account and obtain an access JWT + refresh token",
         security: [],
         requestBody: {
           required: true,
@@ -142,7 +144,7 @@ export const openApiSpec = {
     "/auth/login": {
       post: {
         tags: ["Auth"],
-        summary: "Exchange credentials for a session token",
+        summary: "Exchange credentials for an access JWT + refresh token",
         security: [],
         requestBody: {
           required: true,
@@ -162,10 +164,44 @@ export const openApiSpec = {
         },
       },
     },
+    "/auth/refresh": {
+      post: {
+        tags: ["Auth"],
+        summary: "Rotate tokens — exchange a refresh token for a new access + refresh pair",
+        security: [],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: { refreshToken: { type: "string" } },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "New token pair", content: { "application/json": { schema: envelope("#/components/schemas/TokenPair") } } },
+          "401": { description: "Invalid or expired refresh token", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
     "/auth/logout": {
       post: {
         tags: ["Auth"],
-        summary: "Destroy the current session (cookie or Bearer)",
+        summary: "Revoke the refresh token and clear auth cookies",
+        security: [],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: { refreshToken: { type: "string" } },
+              },
+            },
+          },
+        },
         responses: { "200": { description: "Signed out" } },
       },
     },
@@ -372,6 +408,7 @@ export const openApiSpec = {
           { name: "q", in: "query", schema: { type: "string" } },
           { name: "category", in: "query", schema: { type: "string" } },
           { name: "range", in: "query", schema: { type: "string", example: "30d" } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["all", "pending", "approved", "rejected"] } },
           ...pageParams,
         ],
         responses: {
@@ -383,7 +420,7 @@ export const openApiSpec = {
       },
       post: {
         tags: ["Expenses"],
-        summary: "Create an expense",
+        summary: "Create an expense (reps' expenses start pending when approvals are enabled)",
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ExpenseInput" } } } },
         responses: { "200": { description: "Created", content: { "application/json": { schema: envelope("#/components/schemas/Expense") } } } },
       },
@@ -392,15 +429,33 @@ export const openApiSpec = {
       parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
       put: {
         tags: ["Expenses"],
-        summary: "Update an expense",
-        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ExpenseInput" } } } },
-        responses: { "200": { description: "Updated", content: { "application/json": { schema: envelope("#/components/schemas/Expense") } } } },
+        summary: "Update an expense — or record an approval decision when `status` is sent (owner/manager only)",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                oneOf: [{ $ref: "#/components/schemas/ExpenseInput" }, { $ref: "#/components/schemas/ExpenseDecision" }],
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "Updated or decided", content: { "application/json": { schema: envelope("#/components/schemas/Expense") } } } },
       },
       patch: {
         tags: ["Expenses"],
-        summary: "Update an expense (alias of PUT)",
-        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ExpenseInput" } } } },
-        responses: { "200": { description: "Updated", content: { "application/json": { schema: envelope("#/components/schemas/Expense") } } } },
+        summary: "Update an expense or record a decision (alias of PUT)",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                oneOf: [{ $ref: "#/components/schemas/ExpenseInput" }, { $ref: "#/components/schemas/ExpenseDecision" }],
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "Updated or decided", content: { "application/json": { schema: envelope("#/components/schemas/Expense") } } } },
       },
       delete: {
         tags: ["Expenses"],
@@ -459,7 +514,7 @@ export const openApiSpec = {
       },
       patch: {
         tags: ["Requisitions"],
-        summary: "Approve / reject / receive (owner/manager only)",
+        summary: "Approve / reject / receive (owner/manager only) — supports partial approval via approvedQty",
         requestBody: {
           required: true,
           content: {
@@ -470,6 +525,11 @@ export const openApiSpec = {
                 properties: {
                   status: { type: "string", enum: ["pending", "approved", "rejected", "received"] },
                   note: { type: "string" },
+                  approvedQty: {
+                    type: "integer",
+                    minimum: 0,
+                    description: "Partial approval — units granted (≤ requestedQty). Omit to grant the full request.",
+                  },
                 },
               },
             },
@@ -557,11 +617,215 @@ export const openApiSpec = {
         responses: { "200": { description: "Reference data" } },
       },
     },
+    "/users": {
+      get: {
+        tags: ["Users"],
+        summary: "List team accounts (owner/manager only)",
+        responses: {
+          "200": { description: "Team accounts", content: { "application/json": { schema: { type: "object", properties: { data: { type: "array", items: { $ref: "#/components/schemas/UserSummary" } } } } } } },
+          "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+      post: {
+        tags: ["Users"],
+        summary: "Create a team account (owner/manager only; only owners can create owners)",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/UserInput" } } },
+        },
+        responses: {
+          "200": { description: "Created", content: { "application/json": { schema: envelope("#/components/schemas/UserSummary") } } },
+          "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } },
+          "409": { description: "Email already used", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
+    "/users/{id}": {
+      parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+      patch: {
+        tags: ["Users"],
+        summary: "Update a team account — role changes are owner-only; deactivating kills active sessions",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  role: { type: "string", enum: ["owner", "manager", "rep"] },
+                  territory: { type: "string" },
+                  active: { type: "boolean" },
+                  password: { type: "string", minLength: 8 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Updated", content: { "application/json": { schema: envelope("#/components/schemas/UserSummary") } } },
+          "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } },
+          "404": { description: "Not found", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Delete a team account (owner only, never yourself)",
+        responses: {
+          "200": { description: "Deleted" },
+          "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
+    "/categories": {
+      get: {
+        tags: ["Admin"],
+        summary: "Managed picker lists for expense/product categories",
+        parameters: [{ name: "kind", in: "query", schema: { type: "string", enum: ["expense", "product"] } }],
+        responses: {
+          "200": {
+            description: "Categories",
+            content: { "application/json": { schema: { type: "object", properties: { data: { type: "array", items: { $ref: "#/components/schemas/Category" } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ["Admin"],
+        summary: "Add a category (owner/manager only)",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CategoryInput" } } } },
+        responses: {
+          "200": { description: "Created", content: { "application/json": { schema: envelope("#/components/schemas/Category") } } },
+          "409": { description: "Duplicate name", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
+    "/categories/{id}": {
+      parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+      patch: {
+        tags: ["Admin"],
+        summary: "Rename/reorder/reactivate a category (owner/manager only)",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: { name: { type: "string" }, sortOrder: { type: "integer", minimum: 0 }, active: { type: "boolean" } },
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "Updated", content: { "application/json": { schema: envelope("#/components/schemas/Category") } } } },
+      },
+      delete: {
+        tags: ["Admin"],
+        summary: "Delete a category (owner/manager only)",
+        responses: { "200": { description: "Deleted" }, "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } } },
+      },
+    },
+    "/settings": {
+      get: {
+        tags: ["Admin"],
+        summary: "Application settings (currency, tax rate, approval flags) merged with defaults",
+        responses: {
+          "200": {
+            description: "Settings",
+            content: { "application/json": { schema: { type: "object", properties: { data: { $ref: "#/components/schemas/Settings" } } } } },
+          },
+        },
+      },
+      put: {
+        tags: ["Admin"],
+        summary: "Update settings (owner only)",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  currency: { type: "string" },
+                  taxRatePct: { type: "number", minimum: 0, maximum: 100 },
+                  expenseApprovals: { type: "boolean", description: "When true, reps' new expenses start pending approval" },
+                  lowStockAlerts: { type: "boolean" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Saved", content: { "application/json": { schema: { type: "object", properties: { data: { $ref: "#/components/schemas/Settings" } } } } } },
+          "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
+    "/uploads": {
+      get: {
+        tags: ["Admin"],
+        summary: "List uploaded files (metadata only) for an entity",
+        parameters: [
+          { name: "entity", in: "query", schema: { type: "string", enum: ["expense", "requisition", "customer", "general"] } },
+          { name: "entityId", in: "query", schema: { type: "integer" } },
+        ],
+        responses: {
+          "200": {
+            description: "Attachment metadata",
+            content: { "application/json": { schema: { type: "object", properties: { data: { type: "array", items: { $ref: "#/components/schemas/Attachment" } } } } } },
+          },
+        },
+      },
+      post: {
+        tags: ["Admin"],
+        summary: "Upload a file (base64, ≤5MB) — receipts, invoices, photos",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/AttachmentInput" } } },
+        },
+        responses: {
+          "200": { description: "Uploaded", content: { "application/json": { schema: envelope("#/components/schemas/Attachment") } } },
+          "400": { description: "Empty, oversized or invalid file", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
+    "/uploads/{id}": {
+      parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+      get: {
+        tags: ["Admin"],
+        summary: "Download the raw file bytes",
+        responses: {
+          "200": { description: "File content (content-type of the upload)" },
+          "404": { description: "Not found", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+      delete: {
+        tags: ["Admin"],
+        summary: "Delete an upload (owner/manager, or the original uploader)",
+        responses: { "200": { description: "Deleted" }, "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } } },
+      },
+    },
+    "/audit": {
+      get: {
+        tags: ["Admin"],
+        summary: "Admin/approval activity trail (owner/manager only)",
+        parameters: [
+          { name: "entity", in: "query", schema: { type: "string", example: "expense" } },
+          { name: "action", in: "query", schema: { type: "string", example: "expense.approved" } },
+          ...pageParams,
+        ],
+        responses: {
+          "200": {
+            description: "Paginated audit entries",
+            content: { "application/json": { schema: pagedEnvelope("#/components/schemas/AuditEntry") } },
+          },
+          "403": { description: "Forbidden", content: { "application/json": { schema: errorBody } } },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
-      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "opaque", description: "Session token from /auth/login or /auth/register" },
-      cookieAuth: { type: "apiKey", in: "cookie", name: "vf_session" },
+      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT", description: "Access JWT from /auth/login, /auth/register or /auth/refresh" },
+      cookieAuth: { type: "apiKey", in: "cookie", name: "vf_access", description: "Access token cookie (web). The httpOnly `vf_refresh` cookie holds the refresh token." },
     },
     schemas: {
       User: {
@@ -574,11 +838,25 @@ export const openApiSpec = {
           territory: { type: "string" },
           initials: { type: "string" },
           hue: { type: "integer" },
+          active: { type: "boolean" },
         },
       },
       AuthResult: {
         type: "object",
-        properties: { token: { type: "string" }, user: { $ref: "#/components/schemas/User" } },
+        properties: {
+          accessToken: { type: "string", description: "JWT, valid for 15 minutes" },
+          refreshToken: { type: "string", description: "Opaque token, valid for 30 days" },
+          expiresIn: { type: "integer", description: "Access token lifetime in seconds" },
+          user: { $ref: "#/components/schemas/User" },
+        },
+      },
+      TokenPair: {
+        type: "object",
+        properties: {
+          accessToken: { type: "string", description: "JWT, valid for 15 minutes" },
+          refreshToken: { type: "string", description: "Opaque token, valid for 30 days" },
+          expiresIn: { type: "integer", description: "Access token lifetime in seconds" },
+        },
       },
       Product: {
         type: "object",
@@ -701,6 +979,10 @@ export const openApiSpec = {
           expenseDate: { type: "string", format: "date" },
           billable: { type: "boolean" },
           note: { type: "string" },
+          status: { type: "string", enum: ["pending", "approved", "rejected"] },
+          decidedBy: { type: "string" },
+          decidedAt: { type: ["string", "null"], format: "date-time" },
+          decisionNote: { type: "string" },
           createdByName: { type: "string" },
         },
       },
@@ -716,6 +998,19 @@ export const openApiSpec = {
           expenseDate: { type: "string", format: "date" },
           billable: { type: "boolean" },
           note: { type: "string" },
+          status: {
+            type: "string",
+            enum: ["pending", "approved", "rejected"],
+            description: "Owner/manager only. Omit to use the automatic resolution (pending for reps when approvals are enabled).",
+          },
+        },
+      },
+      ExpenseDecision: {
+        type: "object",
+        required: ["status"],
+        properties: {
+          status: { type: "string", enum: ["pending", "approved", "rejected"] },
+          note: { type: "string", description: "Decision note stored on the expense and in the audit trail" },
         },
       },
       Requisition: {
@@ -757,6 +1052,98 @@ export const openApiSpec = {
       },
       Dashboard: { type: "object", description: "Aggregate of today/month stats, 14-day series, payments, categories, stock summary, recent sales, low stock, pending requisitions and movements." },
       Report: { type: "object", description: "Range totals, timeline, sales-by-product, stock table, movements and receivables." },
+      UserSummary: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          name: { type: "string" },
+          email: { type: "string" },
+          role: { type: "string", enum: ["owner", "manager", "rep"] },
+          territory: { type: "string" },
+          initials: { type: "string" },
+          hue: { type: "integer" },
+          active: { type: "boolean" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      UserInput: {
+        type: "object",
+        required: ["name", "email", "password"],
+        properties: {
+          name: { type: "string", minLength: 2 },
+          email: { type: "string", format: "email" },
+          password: { type: "string", minLength: 8 },
+          role: { type: "string", enum: ["owner", "manager", "rep"], default: "rep" },
+          territory: { type: "string" },
+        },
+      },
+      Category: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          kind: { type: "string", enum: ["expense", "product"] },
+          name: { type: "string" },
+          sortOrder: { type: "integer" },
+          active: { type: "boolean" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      CategoryInput: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          kind: { type: "string", enum: ["expense", "product"], default: "expense" },
+          name: { type: "string", maxLength: 40 },
+          sortOrder: { type: "integer", minimum: 0 },
+        },
+      },
+      Settings: {
+        type: "object",
+        description: "Key/value application settings merged over defaults",
+        properties: {
+          currency: { type: "string", example: "USD" },
+          taxRatePct: { type: "number", example: 7.5 },
+          expenseApprovals: { type: "boolean", description: "Reps' new expenses start pending when true" },
+          lowStockAlerts: { type: "boolean" },
+        },
+      },
+      Attachment: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          filename: { type: "string" },
+          mimeType: { type: "string" },
+          sizeBytes: { type: "integer" },
+          entity: { type: "string", enum: ["expense", "requisition", "customer", "general"] },
+          entityId: { type: ["integer", "null"] },
+          uploadedByName: { type: "string" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      AttachmentInput: {
+        type: "object",
+        required: ["filename", "contentBase64"],
+        properties: {
+          filename: { type: "string" },
+          contentBase64: { type: "string", description: "Base64-encoded file bytes (≤5MB decoded)" },
+          mimeType: { type: "string", default: "application/octet-stream" },
+          entity: { type: "string", enum: ["expense", "requisition", "customer", "general"] },
+          entityId: { type: ["integer", "null"] },
+        },
+      },
+      AuditEntry: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          actorId: { type: ["integer", "null"] },
+          actorName: { type: "string" },
+          action: { type: "string", example: "expense.approved" },
+          entity: { type: "string", example: "expense" },
+          entityId: { type: ["integer", "null"] },
+          detail: { type: "string" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
     },
   },
 } as const;
